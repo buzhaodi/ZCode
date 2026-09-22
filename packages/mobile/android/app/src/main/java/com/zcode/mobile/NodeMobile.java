@@ -57,6 +57,7 @@ public class NodeMobile {
                 Log.i(TAG, "Assets already copied (version " + currentVersion + ")");
                 nodeScriptPath = new File(nodeDir, ENTRY_SCRIPT).getAbsolutePath();
                 nodePath = nodeDir.getAbsolutePath();
+                loadNativeLibs();
                 return;
             }
         }
@@ -142,6 +143,9 @@ public class NodeMobile {
         } catch (ErrnoException e) {
             Log.w(TAG, "Failed to set env vars: " + e.getMessage());
         }
+
+        // 删除旧的 port.txt，确保 waitForPort 等待新端口写入
+        new File(context.getFilesDir(), PORT_FILE).delete();
 
         String[] args = {"node", nodeScriptPath};
         Log.i(TAG, "Starting Node.js: " + nodeScriptPath);

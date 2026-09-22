@@ -81,7 +81,10 @@ function resolveWebStaticRoot(): string | undefined {
  * 3. 创建 ZCodeStreamTransport 连接 host 和 agent
  * 4. 返回 transport
  */
-function createInProcessAgentFactory(): ZCodeInProcessAgentFactory {
+function createInProcessAgentFactory(
+  builtinProviderConfigPath?: string,
+  personalProviderConfigPath?: string,
+): ZCodeInProcessAgentFactory {
   const workspacePath = resolveWorkspacePath();
   const storageDir = resolveStorageDir();
 
@@ -101,11 +104,21 @@ function createInProcessAgentFactory(): ZCodeInProcessAgentFactory {
         HOME: resolveDataDir(),
         SHELL: process.env["SHELL"] ?? "/system/bin/sh",
         PATH: process.env["PATH"] ?? "/system/bin:/system/xbin",
+        ...(builtinProviderConfigPath ? { ZCODE_BUILTIN_PROVIDER_CONFIG_FILE: builtinProviderConfigPath } : {}),
+        ...(personalProviderConfigPath ? { ZCODE_PERSONAL_PROVIDER_CONFIG_FILE: personalProviderConfigPath } : {}),
       },
     }).catch((error: unknown) => {
-      // agent 崩溃时销毁输出流，让 transport 检测到关闭
-      const msg = error instanceof Error ? error.message : String(error);
-      console.error(`[android-entry] agent crashed: ${msg}`);
+      // agent 崩溃时记录错误到文件和 stderr
+      const msg = error instanceof Error ? error.stack ?? error.message : String(error);
+      const errLine = `[android-entry] agent crashed: ${msg}\n`;
+      console.error(errLine);
+      try {
+        const { writeFileSync, mkdirSync } = require("node:fs");
+        const { join } = require("node:path");
+        const d = resolveDataDir();
+        mkdirSync(d, { recursive: true });
+        writeFileSync(join(d, "agent-crash.log"), errLine, { flag: "a" });
+      } catch { /* ignore */ }
       agentOutput.destroy(error instanceof Error ? error : new Error(msg));
     });
 
@@ -150,14 +163,10 @@ async function main(): Promise<void> {
   installSqliteModuleHook();
   log("STEP2 DONE");
 
-  // 3. 创建进程内 agent 工厂
-  log("STEP3 create agent factory");
-  const inProcessAgentFactory = createInProcessAgentFactory();
-  log("STEP3 DONE");
-
-  // 4. 初始化 provider 配置
-  log("STEP4 provider config");
+  // 3. 初始化 provider 配置（先于 agent factory，因为 factory 需要配置路径）
+  log("STEP3 provider config");
   let zcodeBuiltinProviderConfigFilePath: string | undefined;
+  let personalProviderConfigFilePath: string | undefined;
   const providerConfigPath = join(__dirname, "assets", "zcode-builtin.json");
   if (existsSync(providerConfigPath)) {
     const providerConfigContent = readFileSync(providerConfigPath, "utf8");
@@ -165,10 +174,29 @@ async function main(): Promise<void> {
       environmentConfigRoot: storageDir,
       content: providerConfigContent,
     });
-    log(`STEP4 DONE provider config: ${zcodeBuiltinProviderConfigFilePath}`);
+    // 创建个人 provider 配置文件（空配置，用户后续可通过 UI 添加自定义 provider）
+    const personalDir = join(storageDir, "runtime", "provider", "personal");
+    mkdirSync(personalDir, { recursive: true });
+    personalProviderConfigFilePath = join(personalDir, "provider_config.json");
+    if (!existsSync(personalProviderConfigFilePath)) {
+      writeFileSync(personalProviderConfigFilePath, JSON.stringify({
+        schemaVersion: 1,
+        revision: 0,
+        config: { providerConfigRules: { templateRules: [], providers: {} } },
+      }));
+    }
+    log(`STEP3 DONE builtin=${zcodeBuiltinProviderConfigFilePath} personal=${personalProviderConfigFilePath}`);
   } else {
-    log("STEP4 SKIP provider config not found");
+    log("STEP3 SKIP provider config not found");
   }
+
+  // 4. 创建进程内 agent 工厂（传入 provider config 路径）
+  log("STEP4 create agent factory");
+  const inProcessAgentFactory = createInProcessAgentFactory(
+    zcodeBuiltinProviderConfigFilePath,
+    personalProviderConfigFilePath,
+  );
+  log("STEP4 DONE");
 
   // 5. 创建本地服务集合
   log("STEP5 create local services");
