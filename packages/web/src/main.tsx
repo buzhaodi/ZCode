@@ -421,6 +421,38 @@ function renderWebBootstrapError(error: unknown): void {
   );
 }
 
+/**
+ * 判断当前页面是否由本地服务提供（Android APK 自包含场景）。
+ * 当 hostname 为 127.0.0.1 / localhost / ::1 时，window.location.origin 即为服务地址。
+ */
+function isLocalhostOrigin(): boolean {
+  const hostname = window.location.hostname;
+  return hostname === "127.0.0.1" || hostname === "localhost" || hostname === "::1";
+}
+
+/** 重试连接时展示的过渡页，避免用户看到空白屏或误导性的"启动失败"。 */
+function renderWebReconnectingScreen(attempt: number): void {
+  document.title = "ZCode - Web";
+  const isZh = /^zh\b/i.test(navigator.language);
+  root.render(
+    <div className="h-dvh min-h-dvh w-screen bg-background text-foreground">
+      <div className="mx-auto flex h-full w-full max-w-lg items-center px-4">
+        <section className="w-full rounded-xl border border-card-border bg-card p-5">
+          <div className="flex items-center gap-3">
+            <span className="size-2 animate-pulse rounded-full bg-primary" />
+            <h1 className="text-ui-xs font-medium">
+              {isZh ? "正在连接本地服务…" : "Connecting to local server…"}
+            </h1>
+          </div>
+          <p className="mt-2 text-ui-xs/relaxed text-foreground-subtle">
+            {isZh ? `重试中（第 ${attempt} 次）` : `Retrying (attempt ${attempt})`}
+          </p>
+        </section>
+      </div>
+    </div>,
+  );
+}
+
 async function bootstrapWebApp() {
   const params = new URLSearchParams(window.location.search);
   if (isWebOAuthCallback(params)) {
@@ -441,37 +473,65 @@ async function bootstrapWebApp() {
     return;
   }
 
-  try {
-    const services = await connectViaWebSocket(bootstrap.wsUrl, {
-      onClose: () => {},
-    });
-    const platform = createWebPlatform();
-    document.title = "ZCode - Web + Server";
+  // Web UI 由本地服务提供时（Android APK 等自包含场景），WebSocket 连接失败
+  // 通常是服务尚未就绪或短暂网络抖动。此时自动重试而非直接报错，
+  // 确保用户无需手动点击 Retry。非 localhost 场景保持原有一次性连接行为。
+  const isLocalhost = isLocalhostOrigin();
+  const maxAttempts = isLocalhost ? 20 : 1;
+  const baseDelayMs = 500;
+  let connectionEstablished = false;
+  let lastError: unknown;
 
-    root.render(
-      <AppErrorBoundary>
-        <ZCodeIntlProvider
-          settingService={services.settingService}
-          broadcastService={services.broadcastService}
-        >
-          <Root
-            services={services}
-            platform={platform}
-            initialWorkspaceAbsPath={bootstrap.initialWorkspaceAbsPath}
-            initialWorkspaceIdentity={bootstrap.initialWorkspaceIdentity}
-            initialTaskId={bootstrap.initialTaskId}
-            restoreSession={bootstrap.restoreSession}
-            allowOpenWorkspace={bootstrap.allowOpenWorkspace}
-            preferDirectoryBrowser
-            supportsEmbeddedBrowser={false}
-            allowRemoteWorkspace={false}
-          />
-        </ZCodeIntlProvider>
-      </AppErrorBoundary>,
-    );
-  } catch (error) {
-    renderWebBootstrapError(error);
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const services = await connectViaWebSocket(bootstrap.wsUrl, {
+        onClose: () => {
+          // 本地服务断开后自动重连：重新加载页面重新走 bootstrap 流程。
+          // 仅在已成功建立连接后触发，避免初始连接失败时 reload 干扰重试循环。
+          if (connectionEstablished && isLocalhostOrigin()) {
+            window.location.reload();
+          }
+        },
+      });
+      connectionEstablished = true;
+
+      const platform = createWebPlatform();
+      document.title = "ZCode - Web + Server";
+
+      root.render(
+        <AppErrorBoundary>
+          <ZCodeIntlProvider
+            settingService={services.settingService}
+            broadcastService={services.broadcastService}
+          >
+            <Root
+              services={services}
+              platform={platform}
+              initialWorkspaceAbsPath={bootstrap.initialWorkspaceAbsPath}
+              initialWorkspaceIdentity={bootstrap.initialWorkspaceIdentity}
+              initialTaskId={bootstrap.initialTaskId}
+              restoreSession={bootstrap.restoreSession}
+              allowOpenWorkspace={bootstrap.allowOpenWorkspace}
+              preferDirectoryBrowser
+              supportsEmbeddedBrowser={false}
+              allowRemoteWorkspace={false}
+            />
+          </ZCodeIntlProvider>
+        </AppErrorBoundary>,
+      );
+      return;
+    } catch (error) {
+      lastError = error;
+      if (attempt < maxAttempts - 1) {
+        // 指数退避：500ms, 750ms, 1125ms, ... 最大 5s
+        const delay = Math.min(baseDelayMs * Math.pow(1.5, attempt), 5000);
+        renderWebReconnectingScreen(attempt + 1);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+    }
   }
+
+  renderWebBootstrapError(lastError);
 }
 
 void bootstrapWebApp();
