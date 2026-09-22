@@ -4,7 +4,9 @@ import type { ZCodeAgentStorageStartupSnapshot } from "#src/zcode-agent/zcodeAge
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { PassThrough } from "node:stream";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { Emitter } from "@zcode/rpc";
 import {
@@ -103,7 +105,24 @@ export interface ZCodeAgentProcessManagerOptions {
     workspaceKey: string;
     signal?: AbortSignal;
   }) => Promise<void> | void;
+  /**
+   * 进程内 agent 工厂。设置后 manager 不再 spawn 子进程，而是调用此工厂
+   * 创建一个进程内 ZCodeStreamTransport（agent 在同一 Node 进程内运行）。
+   * 用于 nodejs-mobile / Android 等无法 spawn 第二个 Node 进程的环境。
+   */
+  inProcessAgentFactory?: ZCodeInProcessAgentFactory;
 }
+
+/**
+ * 进程内 agent 工厂：创建一个已连接到进程内 agent 的流传输。
+ * 工厂内部负责创建 PassThrough 流对并启动 runZCodeProtocolAgent。
+ */
+export type ZCodeInProcessAgentFactory = (context: {
+  workspacePath: string;
+  workspaceIdentity?: string;
+  workspaceKey: string;
+  presentationSurface?: string;
+}) => Promise<import("./zcodeStreamTransport.js").ZCodeStreamTransport>;
 
 interface ManagedZCodeAgentProcess {
   client: ZCodeProtocolClient;
@@ -535,6 +554,21 @@ function wrapZCodeAgentCommandWithStdioTapDevProxy(
   };
 }
 
+/**
+ * 进程内 agent 的假子进程。模拟 ChildProcessWithoutNullStreams 接口，
+ * 让 ZCodeAgentProcessManager 的生命周期管理逻辑无需区分子进程和进程内模式。
+ * pid/exitCode/signalCode/killed 由 manager 的 onClose 回调更新。
+ */
+class FakeAgentChildProcess extends EventEmitter {
+  killed = false;
+  pid: number = process.pid;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  readonly stdin = new PassThrough();
+  readonly stdout = new PassThrough();
+  readonly stderr = new PassThrough();
+}
+
 export class ZCodeAgentProcessManager {
   private readonly processesByWorkspaceKey = new Map<string, ManagedZCodeAgentProcess>();
   private readonly ownedProcesses = new Set<ManagedZCodeAgentProcess>();
@@ -574,6 +608,7 @@ export class ZCodeAgentProcessManager {
   private readonly spawnFallbackCwd: string | undefined;
   private readonly lane: string | undefined;
   private readonly idleTimeoutMs: number | undefined;
+  private readonly inProcessAgentFactory: ZCodeInProcessAgentFactory | undefined;
   private readonly runtimeRestartedEmitter = new Emitter<ZCodeAgentRuntimeRestartedEvent>();
   private readonly runtimeLifecycleEmitter = new Emitter<ZCodeAgentRuntimeLifecycleEvent>();
   private disposeAllInFlight: Promise<void> | undefined;
@@ -595,6 +630,7 @@ export class ZCodeAgentProcessManager {
     this.lane = options?.lane?.trim() || undefined;
     this.idleTimeoutMs =
       options?.idleTimeoutMs && options.idleTimeoutMs > 0 ? options.idleTimeoutMs : undefined;
+    this.inProcessAgentFactory = options?.inProcessAgentFactory;
   }
 
   private reportProcessLifecycle(
@@ -951,6 +987,10 @@ export class ZCodeAgentProcessManager {
     startGeneration: number,
     admissionSignal: AbortSignal,
   ): Promise<ZCodeProtocolClient> {
+    // 进程内模式：不 spawn 子进程，由工厂创建进程内流传输
+    if (this.inProcessAgentFactory) {
+      return this.startInProcessClient(params, workspaceKey, startGeneration, admissionSignal);
+    }
     const startStartedAt = Date.now();
     const resolveCommandStartedAt = Date.now();
     const command = await this.commandResolver({
@@ -1332,6 +1372,190 @@ export class ZCodeAgentProcessManager {
         ).catch(() => undefined);
       }
     });
+    return client;
+  }
+
+  /**
+   * 进程内 agent 启动路径。不 spawn 子进程，而是调用 inProcessAgentFactory
+   * 创建进程内流传输，在同一个 Node 进程内运行 agent。
+   * 用 FakeAgentChildProcess 模拟 ChildProcess 接口，让 manager 的
+   * 生命周期/空闲回收/代际管理逻辑无需改动。
+   */
+  private async startInProcessClient(
+    params: {
+      workspacePath: string;
+      workspaceIdentity?: string;
+    },
+    workspaceKey: string,
+    startGeneration: number,
+    admissionSignal: AbortSignal,
+  ): Promise<ZCodeProtocolClient> {
+    const startStartedAt = Date.now();
+    if (admissionSignal.aborted) {
+      throw admissionSignal.reason ?? new Error("ZCode agent process start was cancelled.");
+    }
+    if (this.disposed) {
+      throw new Error("ZCode agent process manager is disposed.");
+    }
+    if ((this.restartGenerationByWorkspaceKey.get(workspaceKey) ?? 0) !== startGeneration) {
+      throw new Error("ZCode agent process start was cancelled.");
+    }
+
+    // 工厂创建进程内传输（内部启动 runZCodeProtocolAgent）
+    const transport = await this.inProcessAgentFactory!({
+      ...params,
+      workspaceKey,
+      ...(this.presentationSurface ? { presentationSurface: this.presentationSurface } : {}),
+    });
+    if (this.disposed) {
+      transport.dispose();
+      throw new Error("ZCode agent process manager is disposed.");
+    }
+
+    const client = new ZCodeProtocolClient(transport, {
+      requestTimeoutMs: this.requestTimeoutMs,
+    });
+
+    const runtimeGeneration = (this.runtimeGenerationByWorkspaceKey.get(workspaceKey) ?? 0) + 1;
+    this.runtimeGenerationByWorkspaceKey.set(workspaceKey, runtimeGeneration);
+    const runtimeInstanceId = `agent-${randomUUID()}`;
+    const child = new FakeAgentChildProcess();
+    const runtimeIdentity: ZCodeAgentRuntimeIdentity = {
+      generation: runtimeGeneration,
+      identity: this.lane
+        ? `${workspaceKey}:${runtimeGeneration}:in-process:${this.lane}`
+        : `${workspaceKey}:${runtimeGeneration}:in-process`,
+      processId: process.pid,
+      ...(this.lane ? { lane: this.lane } : {}),
+      workspaceKey,
+    };
+    const startedAt = Date.now();
+    const managed: ManagedZCodeAgentProcess = {
+      child: child as unknown as ChildProcessWithoutNullStreams,
+      client,
+      exited: false,
+      readyReported: false,
+      runtimeIdentity,
+      runtimeInstanceId,
+      spawned: false,
+      startedAt,
+      workspace: {
+        workspacePath: params.workspacePath,
+        ...(params.workspaceIdentity ? { workspaceIdentity: params.workspaceIdentity } : {}),
+      },
+    };
+    this.processesByWorkspaceKey.set(workspaceKey, managed);
+    this.ownedProcesses.add(managed);
+
+    const publishStorage = () => {
+      if (this.processesByWorkspaceKey.get(workspaceKey) !== managed) return;
+      if (client.storageStartup.isWaiting) this.clearIdleTimer(managed);
+      else if (
+        client.storageStartup.snapshot?.phase === "ready" &&
+        client.pendingOperationRequestCount === 0
+      ) {
+        this.scheduleIdleReclaim(workspaceKey, managed);
+      }
+      this.storageStartupEmitter.fire({
+        workspaceKey,
+        snapshot: { generation: runtimeGeneration, state: client.storageStartup.snapshot ?? null },
+      });
+    };
+    client.storageStartup.onDidChange(publishStorage);
+    publishStorage();
+    if (this.idleTimeoutMs) {
+      client.onPendingRequestsDrained(() => this.scheduleIdleReclaim(workspaceKey, managed));
+    }
+
+    // 进程内 agent 立即可用（无 async spawn 事件）
+    managed.spawned = true;
+    if (runtimeGeneration > 1 && this.processesByWorkspaceKey.get(workspaceKey) === managed) {
+      this.runtimeRestartedEmitter.fire({ workspaceKey, runtimeIdentity });
+    }
+    if (this.processesByWorkspaceKey.get(workspaceKey) === managed) {
+      this.availableRuntimeIdentityByWorkspaceKey.set(workspaceKey, runtimeIdentity.identity);
+      this.runtimeLifecycleEmitter.fire({
+        workspacePath: params.workspacePath,
+        ...(params.workspaceIdentity ? { workspaceIdentity: params.workspaceIdentity } : {}),
+        workspaceKey,
+        runtimeIdentity,
+        state: "available",
+      });
+    }
+    this.reportProcessLifecycle((reporter) =>
+      reporter.onSpawn?.({
+        pid: process.pid,
+        provider: ZCODE_AGENT_PROVIDER,
+        ...(this.lane ? { lane: this.lane } : {}),
+        workspacePath: params.workspacePath,
+        command: "in-process",
+        args: [],
+        startedAt,
+        runtimeGeneration,
+        runtimeInstanceId,
+      }),
+    );
+    this.reportRuntimeReady(managed);
+    log("ZCode agent in-process client started", {
+      workspaceKey,
+      durationMs: Date.now() - startStartedAt,
+    });
+
+    // 传输关闭 → 模拟子进程 exit
+    transport.onClose((event) => {
+      managed.exited = true;
+      this.clearIdleTimer(managed);
+      const reason = "reason" in event ? event.reason : "transport closed";
+      log("ZCode agent in-process transport closed", {
+        workspaceKey,
+        runtimeIdentity: runtimeIdentity.identity,
+        reason,
+      });
+      const wasActiveClient = this.processesByWorkspaceKey.get(workspaceKey) === managed;
+      if (wasActiveClient) {
+        this.processesByWorkspaceKey.delete(workspaceKey);
+      }
+      this.reportRuntimeUnavailable(managed);
+      this.reportProcessLifecycle((reporter) =>
+        reporter.onExit?.({
+          pid: process.pid,
+          provider: ZCODE_AGENT_PROVIDER,
+          ...(this.lane ? { lane: this.lane } : {}),
+          workspacePath: params.workspacePath,
+          exitCode: 0,
+          signal: null,
+          endedAt: Date.now(),
+          terminationKind: "unexpected",
+          runtimeReady: managed.readyAt != null,
+          ...(reason ? { terminationReason: reason } : {}),
+          runtimeGeneration,
+          runtimeInstanceId,
+          uptimeMs: Math.max(0, Date.now() - startedAt),
+          stderrLineCount: 0,
+        }),
+      );
+    });
+
+    client.onRequestTimeout((event) => {
+      if (this.processesByWorkspaceKey.get(workspaceKey) !== managed) return;
+      warnLog("ZCode agent request timed out (in-process)", {
+        workspaceKey,
+        method: event.method,
+        requestId: event.requestId,
+      });
+      this.processesByWorkspaceKey.delete(workspaceKey);
+      this.reportRuntimeUnavailable(managed);
+      transport.dispose();
+    });
+
+    client.onClose(() => {
+      const wasActiveClient = this.processesByWorkspaceKey.get(workspaceKey) === managed;
+      if (wasActiveClient) {
+        this.processesByWorkspaceKey.delete(workspaceKey);
+      }
+      this.reportRuntimeUnavailable(managed);
+    });
+
     return client;
   }
 

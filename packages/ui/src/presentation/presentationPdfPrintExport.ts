@@ -136,7 +136,7 @@ function detectFontScript(text: string): PrintableFontScript {
   if (/\p{Script=Han}|\p{Script=Hiragana}|\p{Script=Katakana}|\p{Script=Hangul}/u.test(text)) {
     return "cjk";
   }
-  return /[\p{L}\p{N}]/u.test(text) ? "latin" : "symbol";
+  return /[a-zA-Z0-9\u00c0-\uFFFF]/u.test(text) ? "latin" : "symbol";
 }
 
 function isGenericFontFamily(family: string): boolean {

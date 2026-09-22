@@ -1,0 +1,65 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.zcode.mobile'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.zcode.mobile"
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName "3.14.0"
+
+        ndkVersion '27.0.12077973'
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags '-std=c++17'
+                arguments '-DANDROID_STL=c++_shared'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "src/main/cpp/CMakeLists.txt"
+            version "3.22.1"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+        debug {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        pickFirst 'lib/*/libc++_shared.so'
+        // libnode.so 不打包为 jniLib —— 作为 asset 随 APK 分发，运行时复制到 files 目录后用 System.load() 加载
+        exclude 'lib/*/libnode.so'
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    // 避免 aapt 对大 assets 报错
+    aaptOptions {
+        noCompress 'cjs', 'wasm', 'json'
+    }
+}

@@ -1,0 +1,48 @@
+# =============================================================================
+# packages/mobile/.gitignore
+# 规则相对本目录（packages/mobile/）生效。
+# 本目录下大量为下载产物、构建输出与机器相关文件，均可再生，不入库。
+# =============================================================================
+
+# ---- 下载的工具链 / Android SDK cmdline-tools（均可重新下载）----
+zig*.zip
+zig-windows-x86_64-*/
+cmdline-tools.zip
+cmdline-tools-extracted/
+
+# ---- nodejs-mobile npm 打包产物（下载的 tgz 与解压目录）----
+# nodejs-mobile-*.tgz 覆盖 cordova/react-native 等所有变体；
+# package/ 为从 tgz 解压出的 npm 包内容（含预编译 libnode，体积大）。
+nodejs-mobile-*.tgz
+package/
+
+# ---- Android Gradle 构建输出与机器相关配置 ----
+# android/build/ 仅匹配目录，不影响 android/build.gradle 文件。
+android/app/build/
+android/build/
+android/.gradle/
+# CMake/NDK 构建缓存（*.o 已被根 .gitignore 的 *.o 覆盖，这里忽略整个缓存目录）。
+android/app/.cxx/
+# local.properties 记录本机 SDK 路径，机器相关，不应入库。
+android/local.properties
+
+# ---- nodejs-mobile 运行时构建产物（整个目录均可再生，不入库）----
+# 包含 entry-android.cjs（JS bundle，~37MB）、libnode.so（预编译二进制，~60MB）、
+# web/（Vite 构建的前端资源，数千文件：JS chunk、woff2 字体等）、
+# assets/（sql-wasm.wasm、zcode-builtin.json 等运行时资源）。
+android/app/src/main/assets/node/
+
+# ---- nodejs-mobile 预编译二进制（jniLibs 中的 libnode，体积大，非源码）----
+android/app/src/main/jniLibs/*/libnode.so
+
+# ---- Node.js 头文件（来自 npm 包，非本仓库源码）----
+# 仅忽略 include/node/（634 个 Node.js 头文件）；
+# 保留 include/android/jni_md.h（JNI 头，源码，需入库）。
+android/app/src/main/cpp/include/node/
+
+# ---- TypeScript / 构建输出 ----
+dist/
+*.tsbuildinfo
+
+# ---- 调试截图 ----
+screenshot.png

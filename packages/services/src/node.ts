@@ -96,10 +96,12 @@ export type {
   ZCodeAgentCommandResolver,
   ZCodeAgentCommandResolverContext,
   ZCodeAgentProcessManagerOptions,
+  ZCodeInProcessAgentFactory,
 } from "./zcode-agent/zcodeAgentProcessManager.js";
 export { ZCodeProtocolClient } from "./zcode-agent/zcodeProtocolClient.js";
 export type { ZCodeProtocolTransport } from "./zcode-agent/zcodeProtocolTransport.js";
 export { ZCodeStdioTransport } from "./zcode-agent/zcodeStdioTransport.js";
+export { ZCodeStreamTransport } from "./zcode-agent/zcodeStreamTransport.js";
 export {
   getZCodeStdioTapDevLogDir,
   readZCodeStdioTapDevState,
@@ -341,7 +343,10 @@ import { createObservableSettingService } from "./setting/observableSettingServi
 import { createCredentialService } from "./credential/credentialService.js";
 import { createBroadcastService } from "./broadcast/broadcastService.js";
 import { createZCodeAgentService } from "./zcode-agent/zcodeAgentService.js";
-import type { ZCodeAgentCommandResolver } from "./zcode-agent/zcodeAgentProcessManager.js";
+import type {
+  ZCodeAgentCommandResolver,
+  ZCodeInProcessAgentFactory,
+} from "./zcode-agent/zcodeAgentProcessManager.js";
 import { buildAgentTelemetrySpawnEnv } from "./zcode-agent/agentTelemetryEnv.js";
 import { resolveZCodeAgentPresentationSurface } from "./zcode-agent/zcodeAgentPresentationSurface.js";
 import { createZCodeTaskServiceAdapter } from "./zcode-agent/zcodeTaskServiceAdapter.js";
@@ -1310,6 +1315,11 @@ export function createLocalServices(options: {
   // 注入点：默认 resolver 已能覆盖 dev/桌面/SSH 远端三类形态；
   // 测试或特殊宿主想强制走自定义 binary/参数时从这里注入。
   zcodeAgentCommandResolver?: ZCodeAgentCommandResolver;
+  /**
+   * 进程内 agent 工厂。设置后 agent 在同一 Node 进程内运行（不 spawn 子进程）。
+   * 用于 nodejs-mobile / Android 等无法 spawn 第二个 Node 进程的环境。
+   */
+  inProcessAgentFactory?: ZCodeInProcessAgentFactory;
   /** Desktop Main 提前异步采集的本机 runtime 环境；Local Host 注入后不再同步启动 login shell。 */
   runtimeProcessEnvPatch?: Record<string, string>;
   /** 本地桌面上次 workspace 缺失时，仅用于 Agent 子进程 spawn.cwd 兜底。 */
@@ -2088,6 +2098,7 @@ export function createLocalServices(options: {
     resolveDynamicWorkflowClientConfig: () =>
       codingPlanSubscriptionService.getDynamicWorkflowClientConfig(),
     commandResolver: options?.zcodeAgentCommandResolver,
+    inProcessAgentFactory: options?.inProcessAgentFactory,
     presentationSurface: resolveZCodeAgentPresentationSurface({
       runtimeSurface: options?.agentRuntimeContext?.runtimeSurface,
       serviceAuthorityMode: options?.serviceAuthorityMode,

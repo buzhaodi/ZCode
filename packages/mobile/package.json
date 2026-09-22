@@ -1,0 +1,24 @@
+{
+  "name": "@zcode/mobile",
+  "version": "3.14.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/entry-android.js",
+  "scripts": {
+    "build:agent": "node scripts/build-android-entry.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@zcode/server": "workspace:*",
+    "@zcode/services": "workspace:*",
+    "@zcode/shared": "workspace:*",
+    "@zcode/rpc": "workspace:*",
+    "@zcode/client": "workspace:*",
+    "@zcode/bootstrap": "workspace:*",
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "esbuild": "*",
+    "typescript": "*"
+  }
+}
