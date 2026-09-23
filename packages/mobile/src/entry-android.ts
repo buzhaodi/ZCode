@@ -164,16 +164,21 @@ async function main(): Promise<void> {
 
   log(`START dataDir=${dataDir} storageDir=${storageDir}`);
 
-  // 1. 初始化 sql.js WASM
-  const wasmPath = join(__dirname, "assets", "sql-wasm.wasm");
-  log(`STEP1 init sqlite shim wasm=${wasmPath}`);
-  await initSqliteShim(wasmPath);
-  log("STEP1 DONE sqlite shim ready");
+  // 1. 初始化 SQLite — 始终使用 sql.js shim（原生 node:sqlite 在 nodejs-mobile 上可能有兼容问题）
+  const hasNativeSqlite = false; // 始终用 shim，更可靠
+  if (hasNativeSqlite) {
+    log("STEP1 native node:sqlite available, skipping shim");
+  } else {
+    const wasmPath = join(__dirname, "assets", "sql-wasm.wasm");
+    log(`STEP1 init sqlite shim wasm=${wasmPath}`);
+    await initSqliteShim(wasmPath);
+    log("STEP1 DONE sqlite shim ready");
 
-  // 2. 安装 node:sqlite require 钩子
-  log("STEP2 install sqlite hook");
-  installSqliteModuleHook();
-  log("STEP2 DONE");
+    // 2. 安装 node:sqlite require 钩子（拦截原生 node:sqlite，使用 shim）
+    log("STEP2 install sqlite hook");
+    installSqliteModuleHook();
+    log("STEP2 DONE");
+  }
 
   // 3. 初始化 provider 配置（先于 agent factory，因为 factory 需要配置路径）
   log("STEP3 provider config");
