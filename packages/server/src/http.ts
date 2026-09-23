@@ -24,6 +24,7 @@ import {
   ISystemService,
   ITerminalService,
   IProviderProvisioningTargetService,
+  IOAuthService,
 } from "@zcode/services";
 import {
   formatLogPrefix,
@@ -34,6 +35,7 @@ import {
   ZCODE_VERSION,
   type ServerRemoteInfo,
   type ServerRemoteWorkspaceInfo,
+  resolveRuntimeZCodeEndpointOrigin,
 } from "@zcode/shared";
 import { connectRemote, createRemoteBackend, type RemoteConnection } from "./remote/index.js";
 import { createHostCapabilityStore } from "./hostCapability.js";
@@ -362,6 +364,51 @@ export function createHttpServer(
       const message = err instanceof Error ? err.message : String(err);
       return c.json({ error: message }, 500);
     }
+  });
+
+  // OAuth token 交换代理：本地 server 不实现该 REST 路由，转发到官网端点。
+  // SPA 的 tokenUrl 是相对路径 "/api/v1/oauth/token"，在本地部署（127.0.0.1）下会 404，
+  // 导致 OAuth 登录的 token 兑换失败。这里做服务端转发，避免浏览器跨域(CORS)，复用官网兑换逻辑。
+  app.post("/api/v1/oauth/token", async (c) => {
+    const body = await c.req.text();
+    const origin = resolveRuntimeZCodeEndpointOrigin(process.env);
+    try {
+      const upstream = await fetch(`${origin}/api/v1/oauth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      return new Response(await upstream.text(), {
+        status: upstream.status,
+        headers: {
+          "Content-Type": upstream.headers.get("Content-Type") ?? "application/json",
+        },
+      });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      return c.json({ error: `OAuth token proxy failed: ${message}` }, 502);
+    }
+  });
+
+  // zcode:// OAuth deep-link 回调落地：WebView 无法加载 zcode:// scheme，由 MainActivity 把
+  // 回调 URL 转到这里，交给服务端 oauthService.handleCallback 完成授权码兑换（服务端 fetch，无 CORS），
+  // 再跳回 app 根页。必须走服务端 oauthService（桌面/CLI 流），不能用 web SPA 的 webAuthService ——
+  // 后者期望 base64url 编码的 state，而 BigModel 回调返回的是后端生成的 nonce state。
+  app.get("/api/v1/oauth/cli/callback", async (c) => {
+    const callbackUrl = c.req.query("callbackUrl")?.trim();
+    const oauthService = services.getOptional(IOAuthService);
+    if (callbackUrl && oauthService) {
+      try {
+        await oauthService.handleCallback(callbackUrl);
+      } catch (err: unknown) {
+        // 回调失败也跳回根页，错误由 UI 呈现
+        console.warn(
+          "[http] oauth handleCallback failed:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    return c.redirect("/");
   });
 
   // 远程连接的 WebSocket 端点，将远程 services 桥接给浏览器

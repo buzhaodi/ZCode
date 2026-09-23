@@ -2,15 +2,19 @@ package com.zcode.mobile;
 
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.view.View;
+import android.view.WindowInsets;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
 
 import java.io.File;
 
@@ -31,13 +35,17 @@ public class MainActivity extends Activity {
 
     private NodeMobile nodeMobile;
     private WebView webView;
+    /** 本地 HTTP+WS server 端口，供 OAuth 回调重写 zcode:// → http://127.0.0.1:PORT 使用。 */
+    private int serverPort = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // targetSdk 35 在 API 35+ 默认强制 edge-to-edge，WebView 内容会绘制到状态栏背后，
-        // 导致顶部工具栏与状态栏重叠、无法点击。恢复传统 insets 行为，内容从状态栏下方开始。
+        // targetSdk 35 在 API 35+ 默认强制 edge-to-edge。setDecorFitsSystemWindows(true) 在多数设备
+        // 能让内容从状态栏下方开始，但部分厂商 ROM（如小米 HyperOS）会忽略该标志，内容仍绘制到
+        // 状态栏背后。下面再用 WindowInsets 把状态栏/导航栏高度作为容器 padding 下推内容，
+        // 保证无论系统是否尊重 decor-fits 标志，顶部都不与状态栏重叠。
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             getWindow().setDecorFitsSystemWindows(true);
         }
@@ -46,7 +54,32 @@ public class MainActivity extends Activity {
 
         nodeMobile = new NodeMobile(this);
         webView = new WebView(this);
-        setContentView(webView);
+
+        // 外层容器：暗色背景填充系统栏区域（透明状态栏下露出 #161616，与 app 一致），
+        // 并把系统栏 insets 作为 padding，使 WebView 内容从系统栏下方开始。
+        FrameLayout container = new FrameLayout(this);
+        container.setBackgroundColor(android.graphics.Color.parseColor("#161616"));
+        FrameLayout.LayoutParams wvLp = new FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT);
+        container.addView(webView, wvLp);
+        setContentView(container);
+        container.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            public WindowInsets onApplyWindowInsets(View v, WindowInsets insets) {
+                int top, bottom;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    // statusBars/navigationBars 不含 IME，键盘仍由 adjustResize 处理。
+                    top = insets.getInsets(WindowInsets.Type.statusBars()).top;
+                    bottom = insets.getInsets(WindowInsets.Type.navigationBars()).bottom;
+                } else {
+                    top = insets.getSystemWindowInsetTop();
+                    bottom = 0;
+                }
+                v.setPadding(0, top, 0, bottom);
+                return insets;
+            }
+        });
 
         // 配置 WebView
         configureWebView();
@@ -80,6 +113,7 @@ public class MainActivity extends Activity {
                 }
 
                 String url = "http://127.0.0.1:" + port + "/";
+                serverPort = port;
                 Log.i(TAG, "Loading WebView: " + url);
                 runOnUiThread(() -> webView.loadUrl(url));
 
@@ -111,6 +145,19 @@ public class MainActivity extends Activity {
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                Uri uri = request.getUrl();
+                // OAuth 登录回调用 zcode:// 自定义 scheme，WebView 无法加载会报
+                // net::ERR_UNKNOWN_URL_SCHEME。登录走的是服务端 oauthService（桌面/CLI 流），
+                // BigModel 回调的 state 是后端生成的 nonce，不是 web SPA 的 base64url state，
+                // 所以不能交给 web SPA 的 /share/callback。这里把完整 zcode:// URL 交给本地 server 的
+                // /api/v1/oauth/cli/callback 路由，由服务端 oauthService.handleCallback 兑换授权码后跳回根页。
+                if ("zcode".equals(uri.getScheme()) && serverPort > 0) {
+                    String target = "http://127.0.0.1:" + serverPort
+                            + "/api/v1/oauth/cli/callback?callbackUrl=" + Uri.encode(uri.toString());
+                    Log.i(TAG, "OAuth callback -> server-side: " + target);
+                    view.loadUrl(target);
+                    return true;
+                }
                 return false;
             }
         });
