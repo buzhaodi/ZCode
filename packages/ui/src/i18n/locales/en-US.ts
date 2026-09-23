@@ -1367,6 +1367,11 @@ const enUS: Record<string, string> = {
   "workspaceFileTree.openFailed": "Could not open this item",
   "workspaceFileTree.addToChat": "Add to chat",
   "workspaceFileTree.gitStatus.ignored": "Ignored",
+  "workspaceFileTree.newFolder": "New Folder",
+  "workspaceFileTree.newFolderPrompt": "Enter a name for the new folder:",
+  "workspaceFileTree.newFolderNameRequired": "Folder name is required.",
+  "workspaceFileTree.newFolderCreated": "Folder created",
+  "workspaceFileTree.newFolderFailed": "Failed to create folder",
 
   // SSH dialog
   "ssh.trigger": "SSH Connection",

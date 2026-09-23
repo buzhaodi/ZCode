@@ -13,6 +13,7 @@ import {
   Copy,
   Ellipsis,
   FolderOpen,
+  FolderPlus,
   GitCommitVertical,
   RefreshCw,
   Search,
@@ -31,6 +32,7 @@ import {
 import { toast } from "@/components/ui/toast.js";
 import { ControlHintTooltip } from "@/ControlHintTooltip.js";
 import { usePlatform } from "@/hooks/usePlatform.js";
+import { useWorkspaceServices } from "@/hooks/useWorkspaceServices.js";
 import { useZCodeIntl } from "@/i18n/IntlProvider.js";
 import {
   TID_WORKSPACE_FILE_TREE_PANEL,
@@ -48,7 +50,7 @@ import {
   type WorkspaceFileGitStatus,
   type WorkspaceFileTreeRow,
 } from "@/workspace-file-tree/model.js";
-import { getPathLeaf } from "@/lib/path.js";
+import { getPathLeaf, joinFilePath } from "@/lib/path.js";
 import { logger } from "@/logger.js";
 import { WORKSPACE_FILE_TREE_VIRTUAL_ROW_HEIGHT_PX } from "@/workspace-file-tree/constants.js";
 import { getFileManagerLabel } from "@/workspace-file-tree/helpers.js";
@@ -100,6 +102,11 @@ export function WorkspaceFileTree({
 }: WorkspaceFileTreeProps) {
   const { intl } = useZCodeIntl();
   const platform = usePlatform();
+  const { fileService } = useWorkspaceServices(
+    workspacePath,
+    workspaceRemoteSessionId,
+    workspaceIdentity,
+  );
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
   const pendingActivePreviewRevealPathRef = useRef<string | null>(null);
@@ -414,6 +421,36 @@ export function WorkspaceFileTree({
   const refreshInProgress =
     rootLoading || treeData.refreshingLoadedDirectories || searchIndexLoading;
 
+  const handleCreateFolder = useCallback(async () => {
+    // 文件树“新建文件夹”入口：UI 只提交名称，服务层负责落盘。
+    // prompt 是最小改动方案，避免引入额外的模态组件；远程 workspace 也走同一 fileService。
+    if (typeof window === "undefined" || typeof window.prompt !== "function") {
+      return;
+    }
+    const folderName = window.prompt(
+      intl.formatMessage({ id: "workspaceFileTree.newFolderPrompt" }),
+    );
+    const trimmedName = folderName?.trim();
+    if (!trimmedName) {
+      return;
+    }
+    const targetPath = joinFilePath(workspacePath, trimmedName);
+    try {
+      await fileService.createDirectory({ path: targetPath });
+      // 创建后强制刷新 workspace 根目录，新文件夹才会在懒加载树中可见。
+      await treeData.loadDirectory(workspacePath, 0, { force: true });
+      toast(intl.formatMessage({ id: "workspaceFileTree.newFolderCreated" }));
+    } catch (error) {
+      logger.warn("[WorkspaceFileTree] 新建文件夹失败", {
+        path: targetPath,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      toast(
+        `${intl.formatMessage({ id: "workspaceFileTree.newFolderFailed" })}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }, [fileService, intl, treeData, workspacePath]);
+
   const handleOpenInFileManager = useCallback(async () => {
     if (!canOpenInFileManager) {
       return;
@@ -718,6 +755,18 @@ export function WorkspaceFileTree({
             </Button>
           </ControlHintTooltip>
         ) : null}
+        <ControlHintTooltip title={intl.formatMessage({ id: "workspaceFileTree.newFolder" })}>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="text-foreground-subtle hover:bg-surface-hover hover:text-foreground"
+            aria-label={intl.formatMessage({ id: "workspaceFileTree.newFolder" })}
+            onClick={() => void handleCreateFolder()}
+          >
+            <FolderPlus className="size-3.5" />
+          </Button>
+        </ControlHintTooltip>
         <ControlHintTooltip title={intl.formatMessage({ id: "workspaceFileTree.refresh" })}>
           <Button
             type="button"

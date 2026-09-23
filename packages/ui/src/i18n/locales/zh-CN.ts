@@ -1278,6 +1278,11 @@ const zhCN: Record<string, string> = {
   "workspaceFileTree.openFailed": "无法打开该条目",
   "workspaceFileTree.addToChat": "添加到聊天",
   "workspaceFileTree.gitStatus.ignored": "已忽略",
+  "workspaceFileTree.newFolder": "新建文件夹",
+  "workspaceFileTree.newFolderPrompt": "请输入新文件夹名称：",
+  "workspaceFileTree.newFolderNameRequired": "请输入文件夹名称。",
+  "workspaceFileTree.newFolderCreated": "文件夹已创建",
+  "workspaceFileTree.newFolderFailed": "创建文件夹失败",
 
   // SSH 对话框
   "ssh.trigger": "SSH 连接",

@@ -25,6 +25,11 @@ export interface IFileService {
   stat(params: { path: string }): Promise<FileStat>;
   checkFilesExist(params: { paths: string[] }): Promise<Array<{ path: string; exists: boolean }>>;
   resolvePath(params: { path: string }): Promise<string>;
+  /**
+   * 在指定路径创建目录。recursive 让已存在目录幂等成功，
+   * 供文件树“新建文件夹”等 UI 操作通过服务层统一写入，避免 Renderer 直接接触文件系统。
+   */
+  createDirectory(params: { path: string }): Promise<void>;
   ensureConversationWorkspace(): Promise<{
     path: string;
     created: boolean;

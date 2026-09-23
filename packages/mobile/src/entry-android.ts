@@ -127,6 +127,18 @@ function createInProcessAgentFactory(
     // - outputStream = agentInput（host 写入的，agent 读取）
     const transport = new ZCodeStreamTransport(agentOutput, agentInput);
 
+    // 记录 agent 返回的消息到文件，用于调试
+    transport.onMessage((msg: unknown) => {
+      try {
+        const m = msg as Record<string, unknown>;
+        const d = resolveDataDir();
+        const { appendFileSync } = require("node:fs");
+        const { join } = require("node:path");
+        const summary = JSON.stringify(m).slice(0, 500);
+        appendFileSync(join(d, "agent-protocol.log"), `${new Date().toISOString()} [agent→host] ${summary}\n`);
+      } catch { /* ignore */ }
+    });
+
     // 等待 agent 首帧就绪（简单延迟；agent 启动后立即可以接收请求）
     await new Promise<void>((resolve) => setTimeout(resolve, 100));
 
@@ -174,21 +186,49 @@ async function main(): Promise<void> {
       environmentConfigRoot: storageDir,
       content: providerConfigContent,
     });
-    // 创建个人 provider 配置文件（空配置，用户后续可通过 UI 添加自定义 provider）
-    const personalDir = join(storageDir, "runtime", "provider", "personal");
-    mkdirSync(personalDir, { recursive: true });
-    personalProviderConfigFilePath = join(personalDir, "provider_config.json");
-    if (!existsSync(personalProviderConfigFilePath)) {
-      writeFileSync(personalProviderConfigFilePath, JSON.stringify({
-        schemaVersion: 1,
-        revision: 0,
-        config: { providerConfigRules: { templateRules: [], providers: {} } },
-      }));
+    // 个人 provider 配置：优先使用 UI 配置的 ~/.zcode/v2/provider_config.json
+    // 如果不存在则创建空配置（用户后续可通过 UI 添加）
+    const userProviderConfig = join(dataDir, ".zcode", "v2", "provider_config.json");
+    if (existsSync(userProviderConfig)) {
+      personalProviderConfigFilePath = userProviderConfig;
+      log(`STEP3 using user provider config: ${personalProviderConfigFilePath}`);
+    } else {
+      const personalDir = join(storageDir, "runtime", "provider", "personal");
+      mkdirSync(personalDir, { recursive: true });
+      personalProviderConfigFilePath = join(personalDir, "provider_config.json");
+      if (!existsSync(personalProviderConfigFilePath)) {
+        writeFileSync(personalProviderConfigFilePath, JSON.stringify({
+          schemaVersion: 1,
+          revision: 0,
+          config: { providerConfigRules: { templateRules: [], providers: {} } },
+        }));
+      }
+      log(`STEP3 using default (empty) provider config: ${personalProviderConfigFilePath}`);
     }
     log(`STEP3 DONE builtin=${zcodeBuiltinProviderConfigFilePath} personal=${personalProviderConfigFilePath}`);
   } else {
     log("STEP3 SKIP provider config not found");
   }
+
+  // 在 process.env 中设置 provider config 路径，createLocalServices 会读取
+  if (zcodeBuiltinProviderConfigFilePath) {
+    process.env["ZCODE_BUILTIN_PROVIDER_CONFIG_FILE"] = zcodeBuiltinProviderConfigFilePath;
+  }
+  if (personalProviderConfigFilePath) {
+    process.env["ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"] = personalProviderConfigFilePath;
+  }
+
+  // 诊断：验证 personal config 可读
+  const diagPath = join(dataDir, ".zcode", "v2", "provider_config.json");
+  if (existsSync(diagPath)) {
+    const content = readFileSync(diagPath, "utf8");
+    const parsed = JSON.parse(content);
+    const providers = parsed?.config?.providerConfigRules?.providerRules ?? [];
+    log(`DIAG personal config at ${diagPath}: ${providers.length} providers, ${JSON.stringify(providers.map((p: any) => p.providerId))}`);
+  } else {
+    log(`DIAG personal config NOT found at ${diagPath}`);
+  }
+  log(`DIAG getDataBaseDir env: ZCODE_DATA_BASE_DIR=${process.env.ZCODE_DATA_BASE_DIR ?? "(unset)"} HOME=${process.env.HOME ?? "(unset)"}`);
 
   // 4. 创建进程内 agent 工厂（传入 provider config 路径）
   log("STEP4 create agent factory");

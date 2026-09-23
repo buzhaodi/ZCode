@@ -66,6 +66,7 @@ import {
 } from "@/app-shell/workspaceShellWindowChrome.js";
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
+import { Menu } from "lucide-react";
 import { ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable.js";
 import { toast } from "@/components/ui/toast.js";
 import { getGitDirtyFileCount } from "@/git-branch-switcher/display.js";
@@ -433,6 +434,9 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
   const workspaceSidebarResizeLabel = intl.formatMessage({
     id: "workspaceSidebar.resizeSidebar",
   });
+  // Web/移动端没有 DesktopTopOverlay 的侧栏切换按钮（该按钮仅在 macOS/Windows/Linux 桌面渲染）。
+  // 侧栏在窄屏自动收起后，需要一个独立入口让用户重新展开；此 label 用于浮动按钮的无障碍标题。
+  const toggleSidebarLabel = intl.formatMessage({ id: "workspaceSidebar.toggleSidebar" });
 
   useEffect(() => {
     conversationAutoCollapseStateRef.current = {
@@ -1968,6 +1972,23 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
             onGoForward={handleTaskNavForward}
           />
         </ScopedErrorBoundary>
+        {/* Web/移动端没有 DesktopTopOverlay 的侧栏切换按钮（仅桌面 macOS/Windows/Linux 渲染）。
+            侧栏在窄屏自动收起后，用户没有入口重新展开。这里在侧栏隐藏且非桌面环境下渲染一个
+            浮动汉堡按钮，仅在小屏（md 以下）可见，点击后切换侧栏为可见。 */}
+        {!isSidebarVisible && !isDesktop ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            onClick={handleToggleSidebar}
+            aria-label={toggleSidebarLabel}
+            title={toggleSidebarLabel}
+            data-testid="mobile-sidebar-restore"
+            className="fixed left-2 top-2 z-30 shadow-md md:hidden"
+          >
+            <Menu className="size-5" />
+          </Button>
+        ) : null}
       </div>
     </DesktopWindowFrame>
   );

@@ -427,6 +427,15 @@ export function createFileService(options: CreateFileServiceOptions = {}): IFile
       // 这里统一走 realpath，供上层做稳定身份计算，避免同目录被识别成两个 workspace。
       return realpath(params.path);
     },
+    async createDirectory(params: { path: string }): Promise<void> {
+      // 文件树“新建文件夹”入口：UI 只提交目标路径，服务层负责落盘。
+      // recursive 让已存在目录幂等成功；这里校验最终结果是目录，避免路径被占用为文件。
+      await mkdir(params.path, { recursive: true });
+      const dirStat = await stat(params.path);
+      if (!dirStat.isDirectory()) {
+        throw new Error(`Path is not a directory: ${params.path}`);
+      }
+    },
     async createDefaultWorkspace(): Promise<{ path: string }> {
       const workspacePath = join(homedir(), SCRATCH_WORKSPACE_ROOT_NAME);
       await mkdir(workspacePath, { recursive: true });
