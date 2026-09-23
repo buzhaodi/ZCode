@@ -36,6 +36,14 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // targetSdk 35 在 API 35+ 默认强制 edge-to-edge，WebView 内容会绘制到状态栏背后，
+        // 导致顶部工具栏与状态栏重叠、无法点击。恢复传统 insets 行为，内容从状态栏下方开始。
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(true);
+        }
+        // 状态栏底色与 app 暗色背景(#161616)一致，避免顶部色带；暗色主题下系统图标为浅色，可见。
+        getWindow().setStatusBarColor(android.graphics.Color.parseColor("#161616"));
+
         nodeMobile = new NodeMobile(this);
         webView = new WebView(this);
         setContentView(webView);

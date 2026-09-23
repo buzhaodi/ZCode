@@ -277,8 +277,11 @@ async function main(): Promise<void> {
   log(`STEP7 DONE HTTP server on port ${actualPort}`);
 
   // 向 native 层报告端口：同时写文件和 stdout
-  // native Java 层轮询 port.txt 获取端口号，然后启动 WebView
-  const portFilePath = join(dataDir, "port.txt");
+  // native Java 层 NodeMobile.waitForPort() 轮询 new File(getFilesDir(), "port.txt") = filesDir/port.txt。
+  // resolveDataDir() 在 ZCODE_DATA_DIR 未传入时回退到 join(__dirname,"data")（= files/node/data），
+  // 写到 dataDir/port.txt 会与 Java 期望的 filesDir/port.txt 不一致，导致 waitForPort 超时、WebView 不加载。
+  // __dirname = files/node（entry-android.cjs 所在目录），dirname(__dirname) = filesDir，保证与 Java 轮询路径一致。
+  const portFilePath = join(dirname(__dirname), "port.txt");
   writeFileSync(portFilePath, String(actualPort));
   console.log(`ZCODE_PORT:${actualPort}`);
 
