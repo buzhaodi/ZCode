@@ -66,7 +66,7 @@ import {
 } from "@/app-shell/workspaceShellWindowChrome.js";
 import { cn } from "@/components/lib/utils.js";
 import { Button } from "@/components/ui/button.js";
-import { Menu } from "lucide-react";
+import { Menu, PanelLeftClose } from "lucide-react";
 import { ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable.js";
 import { toast } from "@/components/ui/toast.js";
 import { getGitDirtyFileCount } from "@/git-branch-switcher/display.js";
@@ -1973,9 +1973,10 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
           />
         </ScopedErrorBoundary>
         {/* Web/移动端没有 DesktopTopOverlay 的侧栏切换按钮（仅桌面 macOS/Windows/Linux 渲染）。
-            侧栏在窄屏自动收起后，用户没有入口重新展开。这里在侧栏隐藏且非桌面环境下渲染一个
-            浮动汉堡按钮，仅在小屏（md 以下）可见，点击后切换侧栏为可见。 */}
-        {!isSidebarVisible && !isDesktop ? (
+            窄屏下侧栏既无展开入口也无折叠入口。在非桌面、小屏（md 以下）始终渲染一个浮动切换按钮：
+            侧栏隐藏时显示 Menu（展开），侧栏可见时显示 PanelLeftClose（折叠），点击 handleToggleSidebar 切换。
+            按钮位于 fixed left-2 top-2，落在侧栏顶部 h-12 空白拖拽条上，不遮挡侧栏内控件。 */}
+        {!isDesktop ? (
           <Button
             type="button"
             variant="outline"
@@ -1983,10 +1984,14 @@ export const WorkspaceShellLayout = memo(function WorkspaceShellLayoutComponent(
             onClick={handleToggleSidebar}
             aria-label={toggleSidebarLabel}
             title={toggleSidebarLabel}
-            data-testid="mobile-sidebar-restore"
+            data-testid={isSidebarVisible ? "mobile-sidebar-collapse" : "mobile-sidebar-restore"}
             className="fixed left-2 top-2 z-30 shadow-md md:hidden"
           >
-            <Menu className="size-5" />
+            {isSidebarVisible ? (
+              <PanelLeftClose className="size-5" />
+            ) : (
+              <Menu className="size-5" />
+            )}
           </Button>
         ) : null}
       </div>
